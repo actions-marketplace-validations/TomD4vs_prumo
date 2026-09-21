@@ -418,7 +418,7 @@ test('the text report names the file and line of a broken link', () => {
   catch (e) { out = e.stdout.toString(); assert.equal(e.status, 1); }
   assert.match(out, /^  CLAUDE\.md:3  \[\[gone-note\]\]$/m);
   assert.match(out, /^  CLAUDE\.md:3  docs\/gone\.md$/m);
-  assert.match(out, /, 1 file in the git index$/m);
+  assert.match(out, /, 1 file tracked by git$/m);
 });
 
 test('a path that .gitignore covers is exempt and counted, not reported', () => {
@@ -1574,4 +1574,51 @@ test('a shell comment ends a command line, the repository name is a prefix befor
   const r = analyze({ repo, targets: resolveTargets(repo, []) });
   assert.deepEqual(r.unknownCommands.map((c) => c.cited), ['make gone'], 'the words after # are a comment, and only the target nothing defines is reported');
   assert.deepEqual(r.missingPaths.map((o) => o.cited), ['docs/gone.md'], 'the repository name before a root file resolves, and a folder the sentence makes conditional is quiet');
+});
+
+test('a note with CRLF line endings reads the same as one with LF, and a fix keeps the endings it found', () => {
+  const note = [
+    '# app', '',
+    '```', 'src/component.vue', 'docs/missing-file.md', '```', '',
+    '```bash', 'node scripts/seed.js --force', '```', '',
+    '```markdown', 'See `src/gone-quoted.ts` and [a link](docs/gone.md).', '```', '',
+    '```js', "const x = require('lib/gone.js');", '```', '',
+    '<!-- prumo-ignore-next-line -->',
+    '```', 'docs/silenced.md', '```', '',
+    '<!-- [commented](docs/also-gone.md) -->',
+    'A real one: [live](docs/really-gone.md).', '',
+  ];
+  const files = { 'src/Component.vue': '', 'docs/README.md': '' };
+  const seen = (r) => [
+    r.caseMismatch.map((c) => [c.line, c.cited, c.actual]),
+    r.missingPaths.map((m) => [m.line, m.cited]),
+    r.brokenLinks.map((l) => [l.line, l.cited]),
+    r.stats.suppressed,
+  ];
+  const lf = run({ 'CLAUDE.md': note.join('\n'), ...files });
+  assert.deepEqual(seen(lf), [[[4, 'src/component.vue', 'src/Component.vue']], [[5, 'docs/missing-file.md'], [9, 'scripts/seed.js']], [[26, 'docs/really-gone.md']], 1]);
+
+  const repo = repoWith({ 'CLAUDE.md': note.join('\r\n'), ...files });
+  const targets = resolveTargets(repo, []);
+  const crlf = analyze({ repo, targets });
+  assert.deepEqual(seen(crlf), seen(lf), 'the fences open, the quotation and the comment stay quiet, and the marker still counts');
+
+  applyCaseFixes(crlf.caseMismatch, targets);
+  const fixed = readFileSync(join(repo, 'CLAUDE.md'), 'utf8');
+  assert.ok(fixed.includes('src/Component.vue\r\n'), 'the case is corrected on its line');
+  assert.equal(fixed.split('\r\n').length, note.length, 'every line still ends in CRLF');
+  assert.ok(!/[^\r]\n/.test(fixed), 'no line ending was rewritten');
+});
+
+test('a link fragment in the line form of GitHub points at a line, not a heading, so only the page is checked', () => {
+  const r = run({
+    'CLAUDE.md': [
+      'See [a](docs/short.md#L1), [b](docs/short.md#L1-L2), [c](docs/short.md#L3C1-L4C2), [d](docs/short.md#L9) and [e](#L5).',
+      'Still checked: [f](docs/short.md#nowhere), [g](docs/Short.md#L1) and [h](docs/gone.md#L1).',
+      '',
+    ].join('\n'),
+    'docs/short.md': '# Intro\nline two\n',
+  });
+  assert.deepEqual(r.brokenLinks.map((l) => [l.kind, l.cited]), [['anchor', 'docs/short.md#nowhere'], ['link', 'docs/gone.md']]);
+  assert.deepEqual(r.caseMismatch.map((c) => [c.cited, c.actual]), [['docs/Short.md', 'docs/short.md']]);
 });

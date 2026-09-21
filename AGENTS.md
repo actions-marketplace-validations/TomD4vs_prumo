@@ -18,6 +18,7 @@ still match the code. Node 18+, ESM, no build step.
 - `action.yml` — the GitHub Action, `uses: TomD4vs/prumo@v1`: a composite step that runs the checked-out `bin/prumo.mjs`. Not in the npm tarball.
 - `.pre-commit-hooks.yaml` — the hook for the pre-commit framework; its `files:` regex is guarded by the same test as the hook in `docs/agents.md`.
 - `server.json` — the entry of the MCP server in the official MCP Registry, published with `mcp-publisher`; its `name` must equal `mcpName` in `package.json`, and both versions follow the package. Not in the npm tarball.
+- `glama.json` — the claim of the server listing on Glama, naming the maintainers who may configure its Docker build and cut a release there; the quality score the awesome-mcp-servers listing asks for comes from that release. Not in the npm tarball.
 - `docs/design.md` — **read this before changing behaviour.** Why there are so few checks,
   what was measured and rejected, what each filter defends against, and the order in which a
   path is resolved. `docs/api.md` has the development recipes.
@@ -39,6 +40,9 @@ node bin/prumo.mjs . --all      # do not truncate
 - **The git index is the source of truth for paths**, never the filesystem: `existsSync`
   reports success for the wrong letter case on Windows and macOS, which is the exact bug
   the case check exists to find.
+- **Split a file into lines with `/\r?\n/`, never with `'\n'`.** A CRLF checkout keeps its `\r`
+  otherwise, the fence opener stops matching, and every filter that rests on a fenced block is
+  off on Windows while Linux reads the same file clean. A real repository showed it in 0.9.1.
 - **Precision over recall.** A generic "does this symbol exist" check was built and removed
   after measuring 2% precision across seven audits. Do not add a check without measuring it
   on a real corpus first.

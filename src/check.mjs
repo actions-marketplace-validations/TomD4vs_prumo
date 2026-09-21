@@ -47,6 +47,8 @@ const OUTSIDE_REPO = /^(~|\/|[A-Za-z]:[\\/]|\.\.\/|https?:|file:|\$)/;
 const HOSTNAME = /^[\w-]+(\.[\w-]+)*\.(com|org|net|io|dev|ai|app|co|edu|gov|de|br|uk|fr|es|it|nl|ch|at|eu|me|info|xyz)\//i;
 /** What a note appends to a path to point inside the file: a line number, a GitHub `#L10` anchor, a `::symbol` or a `:symbol`. */
 const INSIDE_FILE = /([:#]L?\d+(-L?\d+)?|::?[A-Za-z_$][\w.$]*(\(\))?)$/;
+/** A link fragment in the line form of GitHub, `L12`, `L12-L20` or `L12C3-L14C7`, points at a line, which moves with every edit, so only the page is checked. */
+const LINE_ANCHOR = /^L\d+(C\d+)?(-L?\d+(C\d+)?)?$/i;
 const WILDCARD = /[<>{}*[\]]|\.\.\.|…/;
 /** `path/to/thing.js`, `tests/path/test.py` and `src/foo/bar.test.ts` are how an example spells its argument, not files in this repository. */
 const PLACEHOLDER_PATH = /(^|[/])(path[/]|(foo|bar|baz)([/.]|$))/i;
@@ -467,7 +469,8 @@ const MOVES_OR_DELETES = /^(git\s+)?(mv|rm|del|rename)\b/i;
  * Marks each line as prose, code inside a fenced block, or skipped: a fence line, a block that
  * quotes markdown, a block under a `prumo-ignore-next-line` marker, and anything inside an HTML
  * comment. A code line keeps the index of its opening fence, so the sentence that introduces the
- * block counts as its context.
+ * block counts as its context. A line that kept its `\r` still opens a fence, so a caller that
+ * split on `\n` alone reads a CRLF file the way it reads an LF one.
  */
 export function classifyLines(lines) {
   const out = [];
@@ -493,7 +496,7 @@ export function classifyLines(lines) {
       if (end < 0) { text = text.slice(0, open); comment = true; break; }
       text = text.slice(0, open) + ' ' + text.slice(end + 3);
     }
-    const opener = text.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    const opener = text.match(/^\s*(`{3,}|~{3,})(.*)\r?$/);
     if (opener && !(opener[1][0] === '`' && opener[2].includes('`'))) {
       const info = opener[2].trim();
       const read = !QUOTES_MARKDOWN.test(info) && !SOURCE_LANGUAGE.test(info) && !(i > 0 && IGNORE_NEXT.test(lines[i - 1]));
@@ -733,7 +736,7 @@ function verdictOn(lines, marked, headings, i, m, at, len) {
 function makeTargets(body) {
   const targets = new Set();
   let dynamic = false;
-  for (const raw of body.split('\n')) {
+  for (const raw of body.split(/\r?\n/)) {
     if (raw.startsWith('\t')) continue;
     const m = raw.replace(/#.*$/, '').match(/^([^\s:=#][^:=]*?)\s*::?(?!=)/);
     if (!m) continue;
@@ -1029,7 +1032,7 @@ function configFileIssues(rel, text, repo, index, ignored, resolveOnce) {
   const issues = [];
   let json;
   try { json = JSON.parse(text); } catch { return issues; }
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   const lineOf = (needle) => { const i = lines.findIndex((l) => l.includes(needle)); return i < 0 ? 1 : i + 1; };
   const check = (command, where) => {
     for (const { p } of pathsInCode(command.replace(PROJECT_DIR_VAR, ''))) {
@@ -1133,7 +1136,7 @@ export function analyze({ repo, targets, config = null, baseline = null, only = 
     if (body === null) continue;
     if (!inIndex(target)) untracked++;
     if (IGNORE_FILE.test(body.slice(0, 400))) { suppressed++; continue; }
-    const lines = body.split('\n');
+    const lines = body.split(/\r?\n/);
     const isHistorical = HISTORICAL_NAME.test(target.label) || HISTORICAL_DESC.test(body.slice(0, 600));
     if (isHistorical) historical++;
     const marked = classifyLines(lines);
@@ -1243,7 +1246,7 @@ export function analyze({ repo, targets, config = null, baseline = null, only = 
         const anchor = decodeLink(fragment).toLowerCase();
         if (!to) {
           const own = anchorsOf(target.path, body);
-          if (anchor && !own.has(anchor)) {
+          if (anchor && !LINE_ANCHOR.test(fragment) && !own.has(anchor)) {
             const near = nearAnchor(own, anchor);
             brokenLinks.push({ file: target.label, line: i + 1, kind: 'anchor', cited: `#${fragment}`, suggestion: near ? `#${near}` : null });
           }
@@ -1273,7 +1276,7 @@ export function analyze({ repo, targets, config = null, baseline = null, only = 
         if (inside && index.known.has(rel)) {
           cite(rel, false);
           record(i, to, rel);
-          if (anchor && /\.(md|mdx)$/i.test(rel)) {
+          if (anchor && !LINE_ANCHOR.test(fragment) && /\.(md|mdx)$/i.test(rel)) {
             const theirs = anchorsOf(abs);
             if (!theirs.has(anchor)) {
               const near = nearAnchor(theirs, anchor);
